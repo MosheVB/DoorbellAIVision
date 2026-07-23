@@ -1,0 +1,94 @@
+services:
+  doorbell-ai:
+    build: .
+    runtime: nvidia
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - config/camera.env
+    environment:
+      # Default true for headless server + LAN browser. Override: ENABLE_WEB=false docker compose up
+      - ENABLE_WEB=${ENABLE_WEB:-true}
+      # Make all scripts in the mounted volume importable as Python modules
+      - PYTHONPATH=/app/scripts
+      # Pass through from host shell so this works: INPUT_VIDEO=/output/test.mp4 docker compose run …
+      # (Without these, only env_file + explicit `docker compose run -e VAR=…` are visible.)
+      - INPUT_VIDEO
+      - FILE_MAX_FRAMES
+      - SAVE_DETECTIONS
+      - RECORD_RTSP
+      - RECORD_RTSP_NAME
+      # Default off so systemd gets package PiP without an empty host env overriding camera.env.
+      - DISABLE_PKG_CAM=${DISABLE_PKG_CAM:-false}
+      - DETECTIONS_VIDEO_NAME
+      - DETECTIONS_MP4_H264_FINALIZE
+      - DETECTIONS_MP4_H264_PRESET
+      - DETECTIONS_MP4_H264_CRF
+      - VIDEO_WRITER_FOURCC_LIST
+      - VIDEO_WRITER_PREFER_SOFTWARE
+      # Common tuning/feature flags (so you can run without typing `-e ...`
+      # for every var; still overridable with `docker compose run -e VAR=...`).
+      - DETECTION_MODEL
+      - YOLO11_WEIGHTS
+      - YOLO11_WEIGHTS_DIR
+      - YOLO11_IMGSZ
+      - YOLO11_DEVICE
+      - DETECTION_THRESHOLD
+      - MIN_DET_FRACTION
+      - DETECT_CLASS_FILTER
+      - SHOW_BOXES
+      - FILE_START_FRAME
+      - FILE_START_TIME_SEC
+      # Focus trace for far-lock evaluation (scripts/analyze.py)
+      - DEBUG_FOCUS_TRACE
+      - DEBUG_FOCUS_TRACE_CSV_NAME
+      # Dense zoom trace for far-interval mask (scripts/build_far_tune_mask.py)
+      - DEBUG_TRACE
+      - DEBUG_TRACE_EVERY
+      - DEBUG_TRACE_CSV_NAME
+      - FOCUS_FAR_FRAC_THRESHOLD
+      - FOCUS_STABLE_DIST_NORM_THRESHOLD
+      # FAR -> CLOSE mode tuning (scripts/analyze.py)
+      - CLOSE_FRAC_THRESHOLD
+      - CLOSE_SUSTAIN_FRAMES
+      - FULL_SNAPSHOT_EVERY_N_FRAMES
+      - SNAPSHOT_FULL_SCALE
+      - MOTION_PRIME_FAR_SNAPSHOT
+      - MOTION_PRIME_MEAN_DIFF
+      - MOTION_PRIME_COOLDOWN_FRAMES
+      - MOTION_PRIME_GRAY_WIDTH
+      # ROI tuning (normalized x1,y1,x2,y2 — see tools/README_roi_label_tool.md)
+      - INFERENCE_ROI_NORM
+      - ZOOM_ATTENTION_ROI_NORM
+      - MOTION_STAGE1_ROI_NORM
+      - FOVEATED_ROI_NORM
+      - ZOOM_GATE_EMA
+      - ZOOM_PADDING
+      - ZOOM_MIN_FRACTION
+      - ZOOM_OUT_HOLD
+      - ZOOM_SMOOTH
+      - ZOOM_TARGET_EMA
+      - ZOOM_FOCUS_IOU_MIN
+      - FACE_PERSON_UNION_FRAMING
+      - ZOOM_AR_HEIGHT_ANCHOR
+      - ZOOM_PERSON_TOP_PAD_FRAC
+      # Distance-based tighter zoom
+      - ZOOM_PADDING_DIST_FAR_FRAC
+      - ZOOM_PADDING_DIST_NEAR_FRAC
+      - ZOOM_PADDING_DIST_FAR_MUL
+      - ZOOM_PADDING_DIST_NEAR_MUL
+      # Subject-track web UI (scripts/subject_track_server.py, docker_subject_track_server.sh)
+      - SUBJECT_TRACK_PORT
+      - SUBJECT_TRACK_SAMPLE_VIDEO
+      - SUBJECT_TRACK_SAMPLE_VIDEO_ROOT
+      - SUBJECT_TRACK_DEBUG
+      - SUBJECT_TRACK_EDGE_FLOW_WEIGHT
+      - SUBJECT_TRACK_EDGE_STRIP_PX
+      - SUBJECT_TRACK_MAX_SIZE_STEP_RATIO
+    volumes:
+      - ./scripts:/app/scripts
+      - ./tools:/app/tools
+      - ./models:/models
+      - ./output:/output
+    working_dir: /app
+    command: python3 /app/scripts/analyze.py

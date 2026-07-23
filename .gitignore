@@ -1,0 +1,13 @@
+# Secrets / local config
+.env
+config/camera.env
+
+# Generated model files (large binaries, rebuilt per-device)
+models/
+
+# Saved detection video
+output/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

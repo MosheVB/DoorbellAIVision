@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Doorbell ROI label tool</title>
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --panel: #252a33;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #8ab4f8;
+      --danger: #f28b82;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #333;
+      background: var(--panel);
+    }
+    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+    header p { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--muted); }
+    main { display: grid; grid-template-columns: 1fr 320px; gap: 0; min-height: calc(100vh - 5rem); }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .canvas-wrap {
+      padding: 1rem;
+      overflow: auto;
+      background: #111;
+    }
+    canvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      cursor: crosshair;
+      border: 1px solid #444;
+    }
+    aside {
+      background: var(--panel);
+      border-left: 1px solid #333;
+      padding: 1rem;
+      overflow-y: auto;
+    }
+    label { display: block; font-size: 0.75rem; color: var(--muted); margin-top: 0.75rem; }
+    input[type="text"], textarea, select {
+      width: 100%;
+      margin-top: 0.25rem;
+      padding: 0.45rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #1e2228;
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+    textarea { min-height: 4rem; resize: vertical; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+    button {
+      padding: 0.45rem 0.75rem;
+      border-radius: 6px;
+      border: none;
+      background: #3c4043;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    button:hover { background: #5f6368; }
+    button.primary { background: #1a73e8; }
+    button.primary:hover { background: #1967d2; }
+    button.danger { background: #5c2b29; color: #f28b82; }
+    .region-item {
+      margin-top: 0.75rem;
+      padding: 0.65rem;
+      border-radius: 8px;
+      background: #1e2228;
+      border: 1px solid #3c4043;
+    }
+    .region-item h3 { margin: 0 0 0.35rem; font-size: 0.8rem; color: var(--accent); }
+    .region-item .norm { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--muted); word-break: break-all; }
+    .hint { font-size: 0.78rem; color: var(--muted); margin-top: 1rem; }
+    #exportOut {
+      margin-top: 0.75rem;
+      width: 100%;
+      min-height: 120px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+    }
+    .toolbar { margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Doorbell ROI label tool</h1>
+    <p>Load a still frame, drag rectangles on the image, set <strong>label</strong> + <strong>description</strong> for each, then export JSON for <code>camera.env</code> / the assistant.</p>
+  </header>
+  <main>
+    <div class="canvas-wrap">
+      <div class="toolbar row">
+        <input type="file" id="file" accept="image/*" />
+        <button type="button" id="clearDraw">Clear draft rect</button>
+      </div>
+      <canvas id="cv" width="640" height="480"></canvas>
+      <p class="hint">Drag on the image to add a box. Coordinates match pipeline convention: normalized as <code>coord / (width-1)</code> and <code>coord / (height-1)</code> (same as <code>analyze.py</code>).</p>
+    </div>
+    <aside>
+      <label>Presets for <code>label</code> (maps to env vars)</label>
+      <select id="preset">
+        <option value="MOTION_STAGE1_ROI_NORM">MOTION_STAGE1_ROI_NORM — red / stage-1 motion gate</option>
+        <option value="FOVEATED_ROI_NORM">FOVEATED_ROI_NORM — blue / foveated sharpen ROI</option>
+        <option value="CENTER_CROP_ROI_NORM">CENTER_CROP_ROI_NORM — green / fallback zoom (no person bbox)</option>
+        <option value="CUSTOM">CUSTOM — type your own label below</option>
+      </select>
+      <label>Label (env key or short name)</label>
+      <input type="text" id="nextLabel" value="MOTION_STAGE1_ROI_NORM" />
+      <label>Description (what this rectangle is for)</label>
+      <textarea id="nextDesc" placeholder="e.g. Door + porch where we expect approach; exclude sidewalk"></textarea>
+      <div class="row">
+        <button type="button" class="primary" id="addRegion">Add last drawn rect</button>
+      </div>
+      <h2 style="font-size:0.9rem;margin:1rem 0 0.25rem">Regions</h2>
+      <div id="regions"></div>
+      <div class="row" style="margin-top:1rem">
+        <button type="button" id="exportJson">Copy JSON to clipboard</button>
+        <button type="button" class="danger" id="clearAll">Remove all regions</button>
+      </div>
+      <textarea id="exportOut" readonly placeholder="Exported JSON appears here…"></textarea>
+    </aside>
+  </main>
+  <script>
+(function () {
+  const canvas = document.getElementById('cv');
+  const ctx = canvas.getContext('2d');
+  const fileInput = document.getElementById('file');
+  const regionsEl = document.getElementById('regions');
+  const exportOut = document.getElementById('exportOut');
+  const preset = document.getElementById('preset');
+  const nextLabel = document.getElementById('nextLabel');
+  const nextDesc = document.getElementById('nextDesc');
+
+  let img = null;
+  let imgName = '';
+  /** @type {{label:string, description:string, x1:number,y1:number,x2:number,y2:number}[]} */
+  let regions = [];
+  let drawing = false;
+  let sx = 0, sy = 0, cx = 0, cy = 0;
+
+  preset.addEventListener('change', () => {
+    if (preset.value !== 'CUSTOM') nextLabel.value = preset.value;
+  });
+
+  function normFromPx(x1, y1, x2, y2, w, h) {
+    const iw = Math.max(1, w - 1);
+    const ih = Math.max(1, h - 1);
+    const a1 = Math.min(x1, x2), b1 = Math.min(y1, y2);
+    const a2 = Math.max(x1, x2), b2 = Math.max(y1, y2);
+    const nx1 = a1 / iw, ny1 = b1 / ih, nx2 = a2 / iw, ny2 = b2 / ih;
+    return { vals: [nx1, ny1, nx2, ny2] };
+  }
+
+  /** Matches Python `round(norm, 6)` style strings for env paste. */
+  function fixNormStr(vals) {
+    return vals.map((n) => n.toFixed(6)).join(',');
+  }
+
+  function redraw() {
+    if (!img) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const w = canvas.width, h = canvas.height;
+    regions.forEach((r, i) => {
+      const x1 = Math.min(r.x1, r.x2), y1 = Math.min(r.y1, r.y2);
+      const x2 = Math.max(r.x1, r.x2), y2 = Math.max(r.y1, r.y2);
+      ctx.strokeStyle = '#8ab4f8';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.fillStyle = 'rgba(138,180,248,0.15)';
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.fillStyle = '#fff';
+      ctx.font = '14px system-ui';
+      ctx.fillText(String(i + 1) + ': ' + r.label, x1 + 4, y1 + 18);
+    });
+    if (drawing) {
+      const x1 = Math.min(sx, cx), y1 = Math.min(sy, cy);
+      const x2 = Math.max(sx, cx), y2 = Math.max(sy, cy);
+      ctx.strokeStyle = '#f28b82';
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.setLineDash([]);
+    }
+  }
+
+  function canvasPos(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (ev.clientX - rect.left) * scaleX,
+      y: (ev.clientY - rect.top) * scaleY,
+    };
+  }
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!img) return;
+    const p = canvasPos(ev);
+    drawing = true;
+    sx = cx = p.x;
+    sy = cy = p.y;
+    redraw();
+  });
+  canvas.addEventListener('mousemove', (ev) => {
+    if (!drawing || !img) return;
+    const p = canvasPos(ev);
+    cx = p.x;
+    cy = p.y;
+    redraw();
+  });
+  canvas.addEventListener('mouseup', () => {
+    if (!drawing) return;
+    drawing = false;
+    redraw();
+  });
+  canvas.addEventListener('mouseleave', () => {
+    if (drawing) { drawing = false; redraw(); }
+  });
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    imgName = f.name;
+    const url = URL.createObjectURL(f);
+    const im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      img = im;
+      canvas.width = im.naturalWidth;
+      canvas.height = im.naturalHeight;
+      redraw();
+    };
+    im.onerror = () => URL.revokeObjectURL(url);
+    im.src = url;
+  });
+
+  document.getElementById('clearDraw').addEventListener('click', () => {
+    drawing = false;
+    redraw();
+  });
+
+  function renderRegionList() {
+    regionsEl.innerHTML = '';
+    const w = canvas.width, h = canvas.height;
+    regions.forEach((r, i) => {
+      const n = normFromPx(r.x1, r.y1, r.x2, r.y2, w, h);
+      const div = document.createElement('div');
+      div.className = 'region-item';
+      div.innerHTML =
+        '<h3>' + escapeHtml(r.label) + '</h3>' +
+        '<div class="norm">' + escapeHtml(fixNormStr(n.vals)) + '</div>' +
+        '<p style="margin:0.35rem 0 0;font-size:0.8rem">' + escapeHtml(r.description || '—') + '</p>' +
+        '<div class="row"><button type="button" data-del="' + i + '">Remove</button></div>';
+      regionsEl.appendChild(div);
+    });
+    regionsEl.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        regions.splice(Number(btn.getAttribute('data-del')), 1);
+        renderRegionList();
+        redraw();
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  document.getElementById('addRegion').addEventListener('click', () => {
+    if (!img) { alert('Load an image first.'); return; }
+    const x1 = Math.min(sx, cx), y1 = Math.min(sy, cy);
+    const x2 = Math.max(sx, cx), y2 = Math.max(sy, cy);
+    if (x2 - x1 < 3 || y2 - y1 < 3) {
+      alert('Draw a rectangle on the image first (drag).');
+      return;
+    }
+    regions.push({
+      label: nextLabel.value.trim() || 'CUSTOM',
+      description: nextDesc.value.trim(),
+      x1, y1, x2, y2,
+    });
+    nextDesc.value = '';
+    renderRegionList();
+    redraw();
+  });
+
+  document.getElementById('clearAll').addEventListener('click', () => {
+    regions = [];
+    renderRegionList();
+    redraw();
+  });
+
+  document.getElementById('exportJson').addEventListener('click', () => {
+    if (!img) { alert('Load an image first.'); return; }
+    const w = canvas.width, h = canvas.height;
+    const env_snippets = {};
+    const outRegions = regions.map((r, idx) => {
+      const n = normFromPx(r.x1, r.y1, r.x2, r.y2, w, h);
+      const roi_norm = fixNormStr(n.vals);
+      if (/^[A-Z0-9_]+$/.test(r.label)) env_snippets[r.label] = roi_norm;
+      return {
+        id: 'r' + idx,
+        label: r.label,
+        description: r.description,
+        x1_px: Math.round(Math.min(r.x1, r.x2)),
+        y1_px: Math.round(Math.min(r.y1, r.y2)),
+        x2_px: Math.round(Math.max(r.x1, r.x2)),
+        y2_px: Math.round(Math.max(r.y1, r.y2)),
+        roi_norm,
+      };
+    });
+    const payload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      source_image: { file: imgName, width: w, height: h },
+      note: 'roi_norm uses coord/(dim-1) per OpenCV frame convention in this repo.',
+      regions: outRegions,
+      env_snippets,
+    };
+    const text = JSON.stringify(payload, null, 2);
+    exportOut.value = text;
+    navigator.clipboard.writeText(text).then(
+      () => alert('JSON copied to clipboard.'),
+      () => alert('Could not copy; select the text area manually.')
+    );
+  });
+})();
+  </script>
+</body>
+</html>
